@@ -91,7 +91,6 @@
         conn.on('close', () => removePlayer(conn.peer));
     });
 
-    // --- MEJORA: CHAT FUNCIONAL ---
     chatInput.addEventListener('keydown', e => {
         if (e.key === 'Enter' && chatInput.value.trim() !== "") {
             const msg = { type: 'chat', sender: myId, text: chatInput.value };
@@ -115,7 +114,7 @@
             }
         } else if (data.type === 'chat') {
             addChatMessage(data.sender, data.text);
-            if (!hostConn) broadcast(data, data.sender); // El host reenvía a otros
+            if (!hostConn) broadcast(data, data.sender); 
         } else if (data.type === 'update') {
             worldMap = data.worldMap;
             slenderman = data.slenderman;
@@ -139,9 +138,10 @@
             if (connections[peerId]) { connections[peerId].close(); delete connections[peerId]; }
             addChatMessage("Sistema", "Alguien se retiró de la reunión.");
             
-            // --- REQUISITO: SI QUEDAN 2 O MENOS, SE ACABA ---
-            if (Object.keys(players).length <= 2 && gameStarted) {
-                endGame("Poca gente. La reunión terminó.");
+            // SI QUEDA SOLO 1 JUGADOR (TÚ) Y EL OTRO SE SALIÓ: REINICIAR
+            if (gameStarted && Object.keys(players).length < 2) {
+                alert("Te has quedado solo. La reunión ha terminado.");
+                location.reload(); 
             }
             syncToAll();
         }
@@ -167,6 +167,7 @@
             }, 30);
         });
         hostConn.on('data', handleData);
+        hostConn.on('close', () => { alert("Conexión perdida con el Host."); location.reload(); });
     }
 
     function startGame() {
@@ -201,7 +202,7 @@
     let posX = 1.5, posY = 1.5, dirX = 1, dirY = 0, planeX = 0, planeY = 0.66;
     let moveSpeed = 0.08, mouseSensitivity = 0.003;
 
-    canvas.addEventListener('click', () => { if(!chatInput.matches(':focus')) canvas.requestPointerLock(); });
+    canvas.addEventListener('click', () => { if(!chatInput.matches(':focus') && gameStarted) canvas.requestPointerLock(); });
     
     document.addEventListener('mousemove', (e) => {
         if (document.pointerLockElement === canvas) {
@@ -223,8 +224,6 @@
         if(!gameStarted || isDead) return;
         let step = moveSpeed;
         
-        // --- MEJORA: RECOLECCIÓN PARA TODOS (INCLUYE HOST) ---
-        // El host siempre es el que manda sobre el mapa
         let targetX = posX, targetY = posY;
         if(keys['KeyW']) { targetX += dirX * step; targetY += dirY * step; }
         if(keys['KeyS']) { targetX -= dirX * step; targetY -= dirY * step; }
@@ -232,23 +231,21 @@
         if(worldMap[Math.floor(targetX)][Math.floor(posY)] === 0) posX = targetX;
         if(worldMap[Math.floor(posX)][Math.floor(targetY)] === 0) posY = targetY;
 
-        // Actualizar posición propia en el objeto global
         players[myId].x = posX;
         players[myId].y = posY;
 
-        // Si soy el HOST, reviso proximidad de todos a las notas
+        // RECOLECCIÓN GLOBAL AUTORITARIA (EL HOST CHEQUEA A TODOS)
         if(!hostConn) {
             for(let id in players) {
                 let p = players[id];
                 if (p.isDead) continue;
                 let mx = Math.floor(p.x), my = Math.floor(p.y);
-                // Revisar bloques adyacentes por si hay nota (valor 2)
                 for(let ix=-1; ix<=1; ix++) {
                     for(let iy=-1; iy<=1; iy++) {
                         let cx = mx+ix, cy = my+iy;
                         if(worldMap[cx] && worldMap[cx][cy] === 2) {
                             if(Math.hypot(p.x-(cx+0.5), p.y-(cy+0.5)) < 0.7) {
-                                worldMap[cx][cy] = 0; // Quitar nota
+                                worldMap[cx][cy] = 0; 
                                 notesCollected++;
                                 if(notesCollected >= maxNotes) endGame("¡PÁGINAS RECOGIDAS! GANARON.");
                                 syncToAll();
@@ -258,9 +255,7 @@
                 }
             }
 
-            // Movimiento de Slender
             if(slenderman.active) {
-                // Sigue al jugador vivo más cercano
                 let closest = null, minDist = 999;
                 for(let id in players) {
                     if(!players[id].isDead) {
@@ -274,7 +269,6 @@
                     slenderman.y += Math.sin(angle) * 0.02;
                 }
 
-                // Colisión Slender con jugadores
                 for(let id in players) {
                     let p = players[id];
                     if(!p.isDead && Math.hypot(p.x - slenderman.x, p.y - slenderman.y) < 0.4) {
@@ -298,7 +292,6 @@
             requestAnimationFrame(render); return;
         }
 
-        // Raycasting
         let zBuffer = new Array(w);
         for(let x = 0; x < w; x++) {
             let cameraX = 2 * x / w - 1;
@@ -321,8 +314,9 @@
             zBuffer[x] = perpDist;
             let lineHeight = Math.floor(h / perpDist);
             
+            // VOLVER A PAREDES ROJAS PARA LAS NOTAS
             if (hit === 2) { 
-                ctx.strokeStyle = '#fff'; // Las páginas brillan en blanco
+                ctx.strokeStyle = side ? '#880000' : '#ff0000'; 
             } else {
                 let color = Math.max(0, 150 - (perpDist * 15));
                 ctx.strokeStyle = `rgb(${side?color*0.5:color},${side?color*0.5:color},${side?color*0.5:color})`;
@@ -330,7 +324,6 @@
             ctx.beginPath(); ctx.moveTo(x, h/2-lineHeight/2); ctx.lineTo(x, h/2+lineHeight/2); ctx.stroke();
         }
 
-        // Sprites (Jugadores, Slender, Cadáveres)
         let sprites = [];
         if(slenderman.active) sprites.push({...slenderman, color:"#111", sX:0.5, sY:1.8, type:'slender'});
         for(let id in players) {
@@ -351,8 +344,12 @@
                 let sx = Math.floor((w/2) * (1 + tx / ty));
                 let sh = Math.abs(Math.floor(h / ty)) * s.sY, sw = Math.abs(Math.floor(h / ty)) * s.sX;
                 if(sx > 0 && sx < w && ty < zBuffer[sx]) {
+                    ctx.save();
                     ctx.fillStyle = s.color || "#e67e22";
-                    ctx.fillRect(sx - sw/2, h/2 + (s.type === 'corpse' ? sh : -sh/2), sw, sh);
+                    // Dibujar el cadáver pegado al suelo, otros al centro
+                    let drawY = (s.type === 'corpse') ? (h/2 + Math.abs(Math.floor(h/ty))*0.4) : (h/2 - sh/2);
+                    ctx.fillRect(sx - sw/2, drawY, sw, sh);
+                    ctx.restore();
                 }
             }
         });
